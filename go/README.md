@@ -9,6 +9,7 @@ This Go script prints a PDF via Bluetooth to a label printer (ID: DD:0D:30:02:63
 - Supports two connection modes:
   - **Serial port** (traditional RFCOMM virtual serial device) with configurable baud rate (9600‑115200).
   - **Direct Bluetooth socket** (bypasses serial port, uses Linux RFCOMM sockets directly).
+  - **USB connection** (writes directly to USB printer device file, e.g., `/dev/usb/lp0`).
 - Supports 58 mm (384 dots) and 80 mm (576 dots) paper widths, with custom width calculation based on DPI (default 168 DPI).
 - Dry‑run mode for testing (writes raw commands to a file).
 - Debugging flags: `--verbose`, `--test` (send ESC @ and LF), `--self-test`, `--beep`, `--query` (printer detection), `--read` (read response).
@@ -70,20 +71,23 @@ go run print_label.go --pdf <path-to-pdf> [options]
 | `--paper-size` | 58 | Paper width in millimeters (58 or 80). For other widths, the script calculates dots based on DPI. |
 | `--printer-id` | DD:0D:30:02:63:42 | Bluetooth MAC address of the label printer. Used when `--bluetooth=true`. |
 | `--dpi` | 168 | Printer DPI (dots per inch) used for custom paper‑size calculation. Based on 58mm=384 dots. |
-| `--output` | /dev/rfcomm0 | Serial port device (the RFCOMM virtual serial port bound to the printer). Ignored when `--bluetooth=true`. |
+| `--output` | /dev/rfcomm0 | Serial port device or USB device path. Default for USB is `/dev/usb/lp0` if not specified. |
 | `--mode` | 0 | Print mode: 0=normal, 1=double width, 2=double height, 3=double both. |
 | `--dry-run` | false | If set, commands are written to a file instead of being sent to the printer. |
 | `--output-file` | commands.bin | File to write commands when `--dry-run` is used. |
 | `--bluetooth` | false | Use direct Bluetooth socket connection (bypasses serial port). |
+| `--usb` | false | Use USB connection (treats output as a file device). |
 | `--channel` | 1 | RFCOMM channel (default 1 for most printers). Used only with `--bluetooth=true`. |
 | `--baud` | 115200 | Baud rate for serial port communication (9600, 19200, 38400, 57600, 115200). |
 | `--verbose` | false | Enable verbose logging (prints command bytes and conversion details). |
-| `--test` | false | Test connection only: send ESC @ and LF, then exit. |
-| `--self-test` | false | Send self‑test command (US vt eot). |
+| `--test` | false | Print a small "TEST OK" label (supports `--tspl`). |
+| `--self-test` | false | Send self‑test command (supports `--tspl`). |
 | `--beep` | false | Send beep command (ESC B 3 3). |
 | `--read` | false | Read response after sending command (timeout 2s). |
 | `--query` | false | Send printer detection query (DLE EOT STX) and read response, then exit. |
 | `--tspl` | false | Use TSPL command set (instead of ESC/POS). Try this if the printer doesn't respond to standard commands. |
+| `--calibration-pattern` | false | Print a calibration pattern to check alignment (requires --tspl). |
+| `--density-test` | false | Print a test pattern to determine optimal DPI/density (requires --tspl). |
 
 ### Examples
 
@@ -120,6 +124,37 @@ go run print_label.go --pdf label.pdf --bluetooth --printer-id DD:0D:30:02:63:42
 ```bash
 go run print_label.go --pdf label.pdf --output /dev/rfcomm1
 ```
+
+**Print via USB (default /dev/usb/lp0):**
+
+```bash
+go run print_label.go --pdf label.pdf --usb
+```
+
+**Print via USB with custom device path:**
+
+```bash
+go run print_label.go --pdf label.pdf --usb --output /dev/usb/lp1
+```
+
+**Print a calibration pattern to check alignment:**
+
+```bash
+go run print_label.go --usb --calibration-pattern --paper-size 20 --paper-height 10 --tspl
+```
+
+**Print a DPI/density test pattern to find optimal settings (uses --dpi flag):**
+
+```bash
+go run print_label.go --usb --density-test --paper-size 58 --paper-height 40 --tspl --dpi 203
+```
+
+The test pattern includes:
+- Density bars (0–14)
+- Line width test
+- Font size scaling
+- Gradient bar showing DPI effect
+- Checkerboard bitmap
 
 ## Bluetooth Setup
 
@@ -188,15 +223,20 @@ If the printer reacts (e.g., beeps or feeds paper), the connection is working.
 
 **Using the script’s test flags:**
 
-- **Basic connection test** (sends ESC @ and LF):
+- **Basic connection test** (prints "TEST OK"):
   ```bash
   go run print_label.go --test --output /dev/rfcomm0
   ```
   Use `--bluetooth` and `--printer-id` for direct Bluetooth.
+  If using USB: `go run print_label.go --usb --test`
 
 - **Self‑test command** (makes the printer print a test page):
   ```bash
   go run print_label.go --self-test --output /dev/rfcomm0
+  ```
+  If the printer uses TSPL (common for label printers), add `--tspl`:
+  ```bash
+  go run print_label.go --usb --self-test --tspl
   ```
 
 - **Beep command** (makes the printer beep):
@@ -252,3 +292,6 @@ When using the `--read` flag or during printer detection, the script waits for a
 ## License
 
 This project is provided as‑is under the MIT License.
+
+
+>go run print_label.go --usb --calibration-pattern --paper-size 20 --paper-height 10 --tspl --margin-x 12

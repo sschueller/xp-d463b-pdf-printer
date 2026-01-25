@@ -21,6 +21,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// syncCloser wraps an os.File to Sync before closing
+type syncCloser struct {
+	*os.File
+}
+
+func (s *syncCloser) Close() error {
+	_ = s.Sync()
+	return s.File.Close()
+}
+
 // readWithTimeout reads from an io.Reader with a timeout.
 // Returns the read bytes, or nil if timeout occurs.
 func readWithTimeout(r io.Reader, timeout time.Duration) ([]byte, error) {
@@ -415,6 +425,144 @@ func generateCalibrationPattern(widthMm, heightMm, speed, density, marginX, marg
 	return buf.Bytes()
 }
 
+// generateDensityTestPattern returns TSPL commands to print a test pattern for DPI/density tuning.
+// Prints a grid of rectangles with varying densities and text labels.
+// Also includes a DPI scaling test using text at different sizes.
+func generateDensityTestPattern(widthMm, heightMm, speed, marginX, marginY int) []byte {
+	var buf bytes.Buffer
+	
+	// Setup
+	buf.WriteString(fmt.Sprintf("SIZE %d mm,%d mm\r\n", widthMm, heightMm))
+	buf.WriteString("GAP 2 mm,0 mm\r\n")
+	buf.WriteString("DIRECTION 1\r\n")
+	buf.WriteString(fmt.Sprintf("SPEED %d\r\n", speed))
+	buf.WriteString("CLS\r\n")
+
+	// Convert mm to dots (203 DPI = 8 dots/mm)
+	wDots := widthMm * 8
+	hDots := heightMm * 8
+
+	// Title
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"3\",0,1,1,\"DPI/Density Test\"\r\n", 10+marginX, 10+marginY))
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"Find best print quality\"\r\n", 10+marginX, 30+marginY))
+
+	// Density values to test (TSPL density range 0-15)
+	densities := []int{0, 2, 4, 6, 8, 10, 12, 14}
+	boxWidth := wDots / (len(densities) + 1)
+	boxHeight := 20
+	yStart := 60 + marginY
+
+	for i, d := range densities {
+		x := marginX + i*boxWidth + 5
+		// Draw a filled rectangle with this density
+		buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", d))
+		buf.WriteString(fmt.Sprintf("BAR %d,%d,%d,%d\r\n", x, yStart, boxWidth-10, boxHeight))
+		// Label
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"1\",0,1,1,\"D=%d\"\r\n", x, yStart+boxHeight+5, d))
+	}
+	// Reset density to default
+	buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", 8))
+
+	// DPI test: vertical lines at different widths (simulating DPI)
+	yStart2 := yStart + boxHeight + 40
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"Line width test\"\r\n", 10+marginX, yStart2-20))
+	lineWidths := []int{1, 2, 3, 4, 5, 6}
+	for i, w := range lineWidths {
+		x := marginX + 20 + i*30
+		buf.WriteString(fmt.Sprintf("BAR %d,%d,%d,30\r\n", x, yStart2, w, 30))
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"1\",0,1,1,\"%d\"\r\n", x, yStart2+35, w))
+	}
+
+	// DPI scaling test: text at different font sizes (simulating DPI effect)
+	yStart3 := yStart2 + 80
+	if yStart3+60 < hDots+marginY {
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"DPI scaling (font size)\"\r\n", 10+marginX, yStart3-20))
+		fontSizes := []int{1, 2, 3, 4, 5}
+		for i, sz := range fontSizes {
+			x := marginX + 20 + i*60
+			buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"%d\",0,1,1,\"%dpt\"\r\n", x, yStart3, sz, sz))
+		}
+		// Explanation
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"1\",0,1,1,\"Higher DPI = sharper\"\r\n", 10+marginX, yStart3+40))
+	}
+
+	// Print a sample bitmap (small checkerboard)
+	yStart4 := yStart3 + 100
+	if yStart4+20 < hDots+marginY {
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"Checkerboard\"\r\n", 10+marginX, yStart4-20))
+		// Simple 8x8 checkerboard
+		checkSize := 4
+		for row := 0; row < 8; row++ {
+			for col := 0; col < 8; col++ {
+				if (row+col)%2 == 0 {
+					x := marginX + 20 + col*checkSize
+					y := yStart4 + row*checkSize
+					buf.WriteString(fmt.Sprintf("BAR %d,%d,%d,%d\r\n", x, y, checkSize, checkSize))
+				}
+			}
+		}
+	}
+
+	buf.WriteString("PRINT 1,1\r\n")
+	return buf.Bytes()
+}
+
+// generateDensityTestPatternWithDPI extends the test pattern to include a bitmap scaled at different DPI values.
+func generateDensityTestPatternWithDPI(widthMm, heightMm, speed, marginX, marginY, dpi int) []byte {
+	var buf bytes.Buffer
+	
+	// Setup
+	buf.WriteString(fmt.Sprintf("SIZE %d mm,%d mm\r\n", widthMm, heightMm))
+	buf.WriteString("GAP 2 mm,0 mm\r\n")
+	buf.WriteString("DIRECTION 1\r\n")
+	buf.WriteString(fmt.Sprintf("SPEED %d\r\n", speed))
+	buf.WriteString("CLS\r\n")
+
+	// Convert mm to dots using given DPI
+	wDots := int(float64(widthMm) * float64(dpi) / 25.4)
+	hDots := int(float64(heightMm) * float64(dpi) / 25.4)
+
+	// Title with DPI info
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"3\",0,1,1,\"DPI/Density Test (DPI=%d)\"\r\n", 10+marginX, 10+marginY, dpi))
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"Find best print quality\"\r\n", 10+marginX, 30+marginY))
+
+	// Density test (same as before)
+	densities := []int{0, 2, 4, 6, 8, 10, 12, 14}
+	boxWidth := wDots / (len(densities) + 1)
+	boxHeight := int(float64(20) * float64(dpi) / 203.0) // scale height with DPI
+	yStart := 60 + marginY
+
+	for i, d := range densities {
+		x := marginX + i*boxWidth + 5
+		buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", d))
+		buf.WriteString(fmt.Sprintf("BAR %d,%d,%d,%d\r\n", x, yStart, boxWidth-10, boxHeight))
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"1\",0,1,1,\"D=%d\"\r\n", x, yStart+boxHeight+5, d))
+	}
+	buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", 8))
+
+	// DPI scaling test: show actual DPI value
+	yStart2 := yStart + boxHeight + 60
+	buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"DPI: %d (dots/mm=%.1f)\"\r\n", 10+marginX, yStart2, dpi, float64(dpi)/25.4))
+
+	// Print a gradient bitmap (simulate DPI effect)
+	yStart3 := yStart2 + 40
+	if yStart3+40 < hDots+marginY {
+		buf.WriteString(fmt.Sprintf("TEXT %d,%d,\"2\",0,1,1,\"Gradient (DPI effect)\"\r\n", 10+marginX, yStart3-20))
+		// Draw a simple gradient bar
+		barWidth := wDots - 20
+		barHeight := 20
+		for i := 0; i < barWidth; i += 2 {
+			density := i * 15 / barWidth
+			buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", density))
+			buf.WriteString(fmt.Sprintf("BAR %d,%d,2,%d\r\n", marginX+10+i, yStart3, barHeight))
+		}
+		buf.WriteString(fmt.Sprintf("DENSITY %d\r\n", 8))
+	}
+
+	buf.WriteString("PRINT 1,1\r\n")
+	return buf.Bytes()
+}
+
 // generateInitCommand returns ESC @
 func generateInitCommand() []byte {
 	return []byte{0x1B, 0x40}
@@ -492,11 +640,12 @@ func main() {
 	paperHeight := flag.Int("paper-height", 0, "Paper height in mm (optional, for TSPL SIZE command)")
 	printerID := flag.String("printer-id", "DD:0D:30:02:63:42", "Bluetooth MAC address")
 	dpi := flag.Int("dpi", 203, "Printer DPI (dots per inch). Standard is 203. For 58mm ESC/POS, use 168.")
-	outputPort := flag.String("output", "/dev/rfcomm0", "Serial port path (e.g., /dev/rfcomm0)")
+	outputPort := flag.String("output", "/dev/rfcomm0", "Serial port path (e.g., /dev/rfcomm0) or USB device path")
 	mode := flag.Int("mode", 0, "Print mode (0=normal,1=double width,2=double height,3=double both)")
 	dryRun := flag.Bool("dry-run", false, "If true, do not send to serial port, instead write commands to file")
 	outputFile := flag.String("output-file", "commands.bin", "File to write commands when dry-run is enabled")
 	bluetooth := flag.Bool("bluetooth", false, "Use direct Bluetooth connection (instead of serial port)")
+	usb := flag.Bool("usb", false, "Use USB device (treats output as a file, default /dev/usb/lp0)")
 	channel := flag.Int("channel", 1, "RFCOMM channel (default 1)")
 	baud := flag.Int("baud", 115200, "Baud rate for serial port")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
@@ -513,6 +662,7 @@ func main() {
 	marginX := flag.Int("margin-x", 0, "Left margin in dots")
 	marginY := flag.Int("margin-y", 0, "Top margin in dots")
 	calibration := flag.Bool("calibration-pattern", false, "Print a calibration pattern to check alignment")
+	densityTest := flag.Bool("density-test", false, "Print a test pattern to determine optimal DPI/density")
 	flag.Parse()
 
 	// Helper to open port
@@ -520,6 +670,32 @@ func main() {
 		if *bluetooth {
 			log.Printf("Connecting to Bluetooth device %s channel %d", *printerID, *channel)
 			return openBluetoothSocket(*printerID, *channel)
+		} else if *usb {
+			devicePath := *outputPort
+			if devicePath == "/dev/rfcomm0" {
+				devicePath = "/dev/usb/lp0"
+			}
+			log.Printf("Opening USB device %s", devicePath)
+
+			// Use O_WRONLY | O_SYNC to ensure data is flushed immediately
+			// NOTE: Opening with O_RDWR might lock the device or cause issues if we don't read.
+			// We'll stick to O_WRONLY unless reading is explicitly requested.
+			openFlags := os.O_WRONLY | os.O_SYNC
+			if *readResponse || *query {
+				openFlags = os.O_RDWR | os.O_SYNC
+			}
+
+			f, err := os.OpenFile(devicePath, openFlags, 0)
+			if err != nil {
+				if os.IsPermission(err) {
+					log.Printf("Permission denied. Try 'sudo' or adding user to 'lp' group.")
+				}
+				return nil, err
+			}
+			
+			// Reset printer if just testing connection to ensure clean state
+			// But only if we are not reading, as reset might clear buffers
+			return &syncCloser{f}, nil
 		} else {
 			log.Printf("Opening serial port %s at %d baud", *outputPort, *baud)
 			return openSerialPort(*outputPort, *baud)
@@ -527,7 +703,7 @@ func main() {
 	}
 
 	// If any of the test flags are set, run test mode
-	if *test || *selfTest || *beep || *query || *calibration {
+	if *test || *selfTest || *beep || *query || *calibration || *densityTest {
 		port, err := openPort()
 		if err != nil {
 			log.Fatalf("Failed to open connection: %v", err)
@@ -544,36 +720,116 @@ func main() {
 			}
 			log.Printf("Printing calibration pattern for %dx%d mm", *paperSize, *paperHeight)
 			cmds := generateCalibrationPattern(*paperSize, *paperHeight, *speed, *density, *marginX, *marginY)
+			// Debug hex dump
+			log.Printf("Hex dump of calibration commands:")
+			for i, b := range cmds {
+				fmt.Printf("%02x ", b)
+				if (i+1) % 16 == 0 {
+					fmt.Println()
+				}
+			}
+			fmt.Println()
 			_, err := port.Write(cmds)
 			if err != nil {
 				log.Fatalf("Failed to send calibration commands: %v", err)
 			}
+			// Force flush and wait
+			if f, ok := port.(*syncCloser); ok {
+				f.Sync()
+			}
+			time.Sleep(100 * time.Millisecond)
 			log.Println("Calibration pattern sent.")
 			return
 		}
 
+		if *densityTest {
+			if !*tspl {
+				log.Fatal("Density test requires --tspl flag")
+			}
+			if *paperHeight <= 0 {
+				*paperHeight = 30 // default height
+			}
+			log.Printf("Printing DPI/density test pattern for %dx%d mm (DPI=%d)", *paperSize, *paperHeight, *dpi)
+			cmds := generateDensityTestPatternWithDPI(*paperSize, *paperHeight, *speed, *marginX, *marginY, *dpi)
+			log.Printf("Hex dump of density test commands:")
+			for i, b := range cmds {
+				fmt.Printf("%02x ", b)
+				if (i+1) % 16 == 0 {
+					fmt.Println()
+				}
+			}
+			fmt.Println()
+			_, err := port.Write(cmds)
+			if err != nil {
+				log.Fatalf("Failed to send density test commands: %v", err)
+			}
+			if f, ok := port.(*syncCloser); ok {
+				f.Sync()
+			}
+			time.Sleep(100 * time.Millisecond)
+			log.Println("Density test pattern sent.")
+			return
+		}
+
 		if *test {
-			initCmd := []byte{0x1B, 0x40} // ESC @
-			feedCmd := []byte{0x0A}       // LF
-			log.Printf("Sending ESC @")
-			_, err = port.Write(initCmd)
-			if err != nil {
-				log.Fatalf("Failed to send init command: %v", err)
+			if *tspl {
+				// TSPL simple test label
+				// SIZE 50 mm, 30 mm; GAP 2 mm, 0 mm; CLS; TEXT ...; PRINT 1,1
+				cmds := []byte("SIZE 50 mm,30 mm\r\nGAP 2 mm,0 mm\r\nCLS\r\nTEXT 20,20,\"3\",0,1,1,\"TEST OK\"\r\nPRINT 1,1\r\n")
+				log.Printf("Sending TSPL test label: %q", string(cmds))
+				log.Printf("Hex dump of commands:")
+				for i, b := range cmds {
+					fmt.Printf("%02x ", b)
+					if (i+1) % 16 == 0 {
+						fmt.Println()
+					}
+				}
+				fmt.Println()
+				_, err := port.Write(cmds)
+				if err != nil {
+					log.Fatalf("Failed to send TSPL test commands: %v", err)
+				}
+				// Force flush and wait a bit
+				if f, ok := port.(*syncCloser); ok {
+					f.Sync()
+				}
+				time.Sleep(100 * time.Millisecond)
+			} else {
+				// ESC/POS
+				initCmd := []byte{0x1B, 0x40} // ESC @
+				textCmd := []byte("TEST OK")
+				feedCmd := []byte{0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00} // 3 LFs + Cut
+				
+				log.Printf("Sending ESC @ + 'TEST OK' + LF/Cut")
+				log.Printf("Hex dump of initCmd: %x", initCmd)
+				log.Printf("Hex dump of textCmd: %x", textCmd)
+				log.Printf("Hex dump of feedCmd: %x", feedCmd)
+				port.Write(initCmd)
+				port.Write(textCmd)
+				_, err = port.Write(feedCmd)
+				if err != nil {
+					log.Fatalf("Failed to send test commands: %v", err)
+				}
 			}
-			log.Printf("Sending LF")
-			_, err = port.Write(feedCmd)
-			if err != nil {
-				log.Fatalf("Failed to send feed command: %v", err)
-			}
-			log.Println("Test completed. If printer reacted (beep or feed), connection is working.")
+			log.Println("Test commands sent.")
 		}
 		if *selfTest {
-			// US vt eot = 31, 17, 4
-			selfTestCmd := []byte{0x1F, 0x11, 0x04}
-			log.Printf("Sending self-test command %v", selfTestCmd)
-			_, err := port.Write(selfTestCmd)
-			if err != nil {
-				log.Fatalf("Failed to send self-test command: %v", err)
+			if *tspl {
+				// TSPL self-test
+				selfTestCmd := []byte("SELFTEST\r\n")
+				log.Printf("Sending TSPL self-test command: %q", string(selfTestCmd))
+				_, err := port.Write(selfTestCmd)
+				if err != nil {
+					log.Fatalf("Failed to send TSPL self-test command: %v", err)
+				}
+			} else {
+				// ESC/POS self-test: US vt eot = 31, 17, 4
+				selfTestCmd := []byte{0x1F, 0x11, 0x04}
+				log.Printf("Sending ESC/POS self-test command %v", selfTestCmd)
+				_, err := port.Write(selfTestCmd)
+				if err != nil {
+					log.Fatalf("Failed to send self-test command: %v", err)
+				}
 			}
 			log.Println("Self-test command sent. Printer may beep or print test page.")
 		}
@@ -709,6 +965,17 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to open Bluetooth socket: %v", err)
 		}
+	} else if *usb {
+		devicePath := *outputPort
+		if devicePath == "/dev/rfcomm0" {
+			devicePath = "/dev/usb/lp0"
+		}
+		log.Printf("Opening USB device %s", devicePath)
+		// Use the same openPort helper to ensure consistent flags
+		port, err = openPort()
+		if err != nil {
+			log.Fatalf("Failed to open USB device: %v", err)
+		}
 	} else {
 		log.Printf("Opening serial port %s at %d baud", *outputPort, *baud)
 		port, err = openSerialPort(*outputPort, *baud)
@@ -741,5 +1008,7 @@ func main() {
 	}
 	log.Printf("Sent total %d bytes", total)
 
+	// Explicitly close port here to ensure flush happens before exit
+	port.Close()
 	log.Println("Print job completed successfully")
 }
