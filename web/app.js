@@ -3,7 +3,7 @@
  */
 
 const App = {
-    transport: new Transport(),
+    transport: null,
     selectedFile: null,
     presets: null,
 
@@ -12,6 +12,14 @@ const App = {
         this.bindEvents();
         this.toggleInterfaceOptions(document.getElementById('interface-type').value);
         this.log("Application initialized. Ready to connect.");
+    },
+
+    createTransport(type) {
+        if (type === 'http') {
+            return new HTTPTransport();
+        } else {
+            return new Transport();
+        }
     },
 
     loadPresets() {
@@ -62,16 +70,21 @@ const App = {
         // Preset Selection
         document.getElementById('paper-preset').addEventListener('change', (e) => this.applyPreset(e.target.value));
 
-        // Transport Events
-        this.transport.onDisconnect = () => this.updateConnectionStatus(false);
+        // Transport Events will be set when transport is created
     },
 
     toggleInterfaceOptions(type) {
         const baudRateGroup = document.getElementById('baud-rate-group');
+        const serverUrlGroup = document.getElementById('server-url-group');
         if (type === 'serial') {
             baudRateGroup.style.display = 'flex';
+            serverUrlGroup.style.display = 'none';
+        } else if (type === 'http') {
+            baudRateGroup.style.display = 'none';
+            serverUrlGroup.style.display = 'flex';
         } else {
             baudRateGroup.style.display = 'none';
+            serverUrlGroup.style.display = 'none';
         }
     },
 
@@ -109,33 +122,55 @@ const App = {
         const type = document.getElementById('interface-type').value;
         const printerId = document.getElementById('printer-id').value;
         const baudRate = parseInt(document.getElementById('baud-rate').value) || 115200;
+        const serverUrl = document.getElementById('server-url').value;
         
         try {
             this.log(`Connecting via ${type}...`);
-            await this.transport.connect(type, {
-                namePrefix: printerId,
-                baudRate: baudRate
-            });
+            // Create appropriate transport
+            this.transport = this.createTransport(type);
+            // Set disconnect callback
+            this.transport.onDisconnect = () => this.updateConnectionStatus(false);
+            
+            const options = {};
+            if (type === 'serial') {
+                options.baudRate = baudRate;
+                options.namePrefix = printerId;
+            } else if (type === 'bluetooth') {
+                options.namePrefix = printerId;
+            } else if (type === 'http') {
+                options.serverUrl = serverUrl;
+                options.deviceName = 'ESP32 Printer';
+            }
+            
+            await this.transport.connect(type, options);
             this.updateConnectionStatus(true);
             const deviceName = this.transport.deviceName;
             if (deviceName) {
                 this.log(`Connected successfully! Device name: ${deviceName}`, "success");
             } else {
-                this.log("Connected successfully! (Device name not available)", "success");
+                this.log("Connected successfully!", "success");
             }
         } catch (e) {
             this.log(`Connection failed: ${e.message}`, "error");
             console.error(e);
+            // Clean up transport on failure
+            this.transport = null;
         }
     },
 
     async disconnect() {
+        if (!this.transport) {
+            this.updateConnectionStatus(false);
+            return;
+        }
         try {
             await this.transport.disconnect();
             this.updateConnectionStatus(false);
             this.log("Disconnected.");
         } catch (e) {
             this.log(`Disconnect error: ${e.message}`, "error");
+        } finally {
+            this.transport = null;
         }
     },
 
