@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -397,6 +398,7 @@
                 <select id="interface-type">
                     <option value="bluetooth">Web Bluetooth (BLE)</option>
                     <option value="serial">Web Serial (USB / Serial)</option>
+                    <option value="http">HTTP (ESP32 Web Server)</option>
                 </select>
             </div>
             <div class="control-group" id="baud-rate-group" style="display: none;">
@@ -408,6 +410,10 @@
                     <option value="57600">57600</option>
                     <option value="115200" selected>115200</option>
                 </select>
+            </div>
+            <div class="control-group" id="server-url-group" style="display: none;">
+                <label for="server-url">Server URL</label>
+                <input type="text" id="server-url" placeholder="http://192.168.1.100" value="http://192.168.1.1">
             </div>
             <button id="btn-connect">
                 <span class="material-symbols-outlined icon-sm">bluetooth</span>
@@ -483,7 +489,6 @@
                 <input type="checkbox" id="invert">
                 <label for="invert">Invert Colors (White on Black)</label>
             </div>
-            <div class="control-group checkbox-group">
                 <input type="checkbox" id="rotate">
                 <label for="rotate">Rotate 90°</label>
             </div>
@@ -535,6 +540,7 @@
 
     <script src="paper_presets.js"></script>
     <script src="transport.js"></script>
+    <script src="http_transport.js"></script>
     <script src="image_processing.js"></script>
     <script src="printer_commands.js"></script>
     <script src="app.js"></script>
